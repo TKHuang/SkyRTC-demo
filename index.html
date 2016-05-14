@@ -2,74 +2,9 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>SkyRTC聊天室Demo</title>
-  <style type="text/css">
-    html, body {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      padding: 0;
-      background-color: #f0f0f0;
-    }
-
-    #videos {
-      position: absolute;
-      left: 30%;
-      top: 0;
-      bottom: 0;
-      right: 0;
-      overflow: auto;
-    }
-
-    #videos video {
-      display: inline-block;
-      width: 32%;
-    }
-
-    #chat {
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 30%;
-      border: 1px solid #0f0f0f;
-    }
-    #chat .msgIpt, #chat .fileIpt{
-      position: absolute;
-      left: 0;
-      width: 80%;
-    }
-    #chat .sendBtn, #chat .sendFileBtn {
-      position: absolute;
-      left: 80%;
-      width: 20%;
-    }
-    #chat .msgIpt,#chat .sendBtn {
-      bottom: 0;
-    }
-    #chat .fileIpt, #chat .sendFileBtn {
-      bottom: 30px;
-    }
-
-    #chat .msgs {
-      padding: 5%;
-    }
-    #chat .msgs p{
-      margin: 0.3em 0;
-    }
-    #files {
-      position: absolute;
-      bottom: 0;
-      right: 0;
-      width: 20%;
-    }
-    #files .name {
-    }
-    #files .percent {
-      font-weight: bold;
-      text-decoration: none
-    }
-  </style>
+  <link rel="stylesheet" type="text/css" href="styles/style.css">
+  <link rel="stylesheet" href="styles/animate.css">
+  <title>聊天室Demo</title>
 </head>
 <body>
   <div id="chat">
@@ -80,21 +15,32 @@
     <button id="sendBtn" class="sendBtn">发送</button>
   </div>
   <div id="videos">
-    <video id="me" autoplay></video>
+    <video id="me" width="400px" autoplay loop></video>
   </div>
   <div id="files">
   </div>
 </body>
 <script type="text/javascript" src="/SkyRTC-client.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/clmtrackr.js"></script>
+<script src="model/model_pca_20_svm_emotionDetection.js"></script>
+<script src="js/Stats.js"></script>
+<script src="js/emotion_classifier.js"></script>
+<script src="js/emotionmodel2.js"></script>
 <script type="text/javascript">
   var videos = document.getElementById("videos");
   var sendBtn = document.getElementById("sendBtn");
   var msgs = document.getElementById("msgs");
   var sendFileBtn = document.getElementById("sendFileBtn");
   var files = document.getElementById("files");
+  var msgIpt = document.getElementById('msgIpt');
   var rtc = SkyRTC();
 
   /**********************************************************/
+  msgIpt.onkeypress = (v) => {
+    if (v.code === 'Enter') sendBtn.click();
+  }
+
   sendBtn.onclick = function(event){
     var msgIpt = document.getElementById("msgIpt"),
         msg = msgIpt.value,
@@ -102,6 +48,12 @@
     p.innerText = "me: " + msg;
     //广播消息
     rtc.broadcast(msg);
+    rtc.socket.send(JSON.stringify({
+      eventName: "t",
+      data: {
+          data: "GG"
+      }
+    }))
     msgIpt.value = "";
     msgs.appendChild(p);
   };
@@ -112,7 +64,7 @@
   };
   /**********************************************************/
 
-  
+
 
   //对方同意接收文件
   rtc.on("send_file_accepted", function(sendId, socketId, file){
@@ -183,8 +135,16 @@
   });
   //创建本地视频流成功
   rtc.on("stream_created", function(stream) {
-    document.getElementById('me').src = URL.createObjectURL(stream);
-    document.getElementById('me').play();
+    let me = document.getElementById('me');
+    me.src = URL.createObjectURL(stream);
+    me.play();
+    let bounding = me.getBoundingClientRect();
+    let width  = bounding.right - bounding.left,
+        height = width * 3 / 4;
+    me.setAttribute('height', height);
+
+    ctrack.start(document.getElementById('me'));
+    drawLoop();
   });
   //创建本地视频流失败
   rtc.on("stream_create_error", function() {
@@ -194,7 +154,7 @@
   rtc.on('pc_add_stream', function(stream, socketId) {
     var newVideo = document.createElement("video"),
         id = "other-" + socketId;
-    newVideo.setAttribute("class", "other");
+    newVideo.setAttribute("class", "other animated");
     newVideo.setAttribute("autoplay", "autoplay");
     newVideo.setAttribute("id", id);
     videos.appendChild(newVideo);
@@ -209,11 +169,74 @@
   });
   //接收到文字信息
   rtc.on('data_channel_message', function(channel, socketId, message){
+    if (Object.prototype.toString.call(message) === "[object Object]") {
+      // console.log(message);
+      switch (message.emotion) {
+        case 'happy':
+          animate(`other-${socketId}`, 'bounce')
+          break;
+        case 'disgusted':
+          animate(`other-${socketId}`, 'shake')
+          break;
+      }
+      return
+    }
     var p = document.createElement("p");
     p.innerText = socketId + ": " + message;
     msgs.appendChild(p);
   });
   //连接WebSocket服务器
   rtc.connect("ws:" + window.location.href.substring(window.location.protocol.length).split('#')[0], window.location.hash.slice(1));
+
+  /********************************************/
+  var ctrack = new clm.tracker();
+  ctrack.init(pModel);
+
+  function drawLoop() {
+  	requestAnimFrame(drawLoop);
+  	if (ctrack.getCurrentPosition()) {
+  		// ctrack.draw(overlay);
+  	}
+  	var cp = ctrack.getCurrentParameters();
+
+  	var er = ec.meanPredict(cp);
+
+  	if (er) {
+  		let e = {
+        value: 0,
+        emotion: undefined
+      };
+
+  		er.forEach( emotion => {
+        if (emotion.value > e.value) {
+          e = emotion;
+        }
+      })
+
+      if (e.value > 0.9 && e.emotion === 'happy') {
+        // console.log(`emotion ${emotion.emotion} with ${emotion.value} value`);
+        console.log(`Result : ${JSON.stringify(er, null, 2)}`);
+        rtc.broadcast(e)
+      }
+
+      if (e.value > 0.6 && e.emotion === 'disgusted') {
+        // console.log(`emotion ${emotion.emotion} with ${emotion.value} value`);
+        console.log(`Result : ${JSON.stringify(er, null, 2)}`);
+        rtc.broadcast(e)
+      }
+
+  	}
+  }
+  var ec = new emotionClassifier();
+  ec.init(emotionModel);
+	var emotionData = ec.getBlank();
+
+  function animate(id, effect) {
+    let video = document.getElementById(id);
+    video.setAttribute("class", `animated ${effect}`);
+    setTimeout(() => {
+      video.removeAttribute("class");
+    }, 1000)
+  }
 </script>
 </html>
